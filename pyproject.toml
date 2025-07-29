@@ -20,9 +20,11 @@ dependencies = [
     "fastparquet>=2024.11.0",
     'geopandas>=1.1.1',
     'loguru',
+    "owslib>=0.34.1",
     'pip',
     "pyarrow>=21.0.0",
     "pysaga-cmd>=1.2.6",
+    "rasterio>=1.4.3",
 ]
 
 [tool.mypy]
