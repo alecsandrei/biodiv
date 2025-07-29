@@ -8,7 +8,9 @@ from pathlib import Path
 
 import geopandas as gpd
 import pandas as pd
+import shapely
 from loguru import logger
+from owslib.wcs import WebCoverageService
 from PySAGA_cmd.saga import SAGA
 
 from biodiv.config import INTERIM_DATA_DIR, RAW_DATA_DIR
@@ -28,16 +30,38 @@ class BiodiversityDataset:
         indices = pd.read_csv(RAW_DATA_DIR / 'biodiversity' / 'indices.csv')
         stations = pd.read_csv(RAW_DATA_DIR / 'biodiversity' / 'stations.csv')
         data = pd.merge(indices, stations, on='Station')
-        return gpd.GeoDataFrame(
-            data,
-            geometry=gpd.points_from_xy(data.Longitude, data.Latitude),
-            crs='EPSG:4326',
+        return cls(
+            gpd.GeoDataFrame(
+                data,
+                geometry=gpd.points_from_xy(data.Longitude, data.Latitude),
+                crs='EPSG:4326',
+            )
         )
 
 
 @dataclass
 class Bathymetry:
-    path: Path = RAW_DATA_DIR / 'bathymetry.tif'
+    path: Path
+    url: str = 'https://ows.emodnet-bathymetry.eu/wcs?SERVICE=WCS&REQUEST=GetCapabilities&VERSION=2.0.1'
+
+    @classmethod
+    def fetch(
+        cls,
+        bbox: tuple[float, float, float, float],
+        out_file: Path,
+    ) -> t.Self:
+        wcs = WebCoverageService(cls.url)
+        dataset_id = 'emodnet__mean'
+        data = wcs.getCoverage(
+            identifier=[dataset_id],
+            format='image/tiff',
+            timeout=120,
+            subsets=[('Lat', bbox[2], bbox[3]), ('Long', bbox[0], bbox[1])],
+        ).read()
+        if out_file is not None:
+            with open(out_file, 'wb') as outfile:
+                outfile.write(data)
+        return cls(out_file)
 
 
 class GeomorphometricVariable(Enum):
@@ -518,14 +542,24 @@ class TerrainAnalysis:
 
 if __name__ == '__main__':
     records = BiodiversityDataset.read_data()
-    bathymetry = Bathymetry()
+    bounds = (
+        shapely.Polygon.from_bounds(*records.data.total_bounds)
+        .buffer(0.1)
+        .bounds
+    )
+    bbox = (bounds[0], bounds[2], bounds[1], bounds[3])
+
+    logger.info('bbox of biodiversity records: %s' % str(bbox))
+    bathymetry = Bathymetry.fetch(
+        bbox=bbox,
+        out_file=INTERIM_DATA_DIR / 'dem.tif',
+    )
     terrain_analysis = TerrainAnalysis(
         bathymetry.path,
         saga=SAGA('saga_cmd'),
         verbose=True,
         infer_obj_type=False,
         ignore_stderr=True,
-        variables=list(GeomorphometricVariable),
     )
     for tool in terrain_analysis.execute():
         logger.info('Computed %s geomorphometric variable' % tool[0])
