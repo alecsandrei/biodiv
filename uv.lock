@@ -12,6 +12,7 @@ dependencies = [
     { name = "loguru" },
     { name = "pip" },
     { name = "pyarrow" },
+    { name = "pysaga-cmd" },
 ]
 
 [package.dev-dependencies]
@@ -28,6 +29,7 @@ requires-dist = [
     { name = "loguru" },
     { name = "pip" },
     { name = "pyarrow", specifier = ">=21.0.0" },
+    { name = "pysaga-cmd", specifier = ">=1.2.6" },
 ]
 
 [package.metadata.requires-dev]
@@ -314,6 +316,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/9d/d9/5ccefb8bca925f44256b188a91c31238cae29ab6ee7f53661ecc04616146/pyproj-3.7.1-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:bf84d766646f1ebd706d883755df4370aaf02b48187cedaa7e4239f16bc8213d", size = 10771259, upload-time = "2025-02-16T04:28:20.822Z" },
     { url = "https://files.pythonhosted.org/packages/2a/7d/31dedff9c35fa703162f922eeb0baa6c44a3288469a5fd88d209e2892f9e/pyproj-3.7.1-cp312-cp312-win32.whl", hash = "sha256:5f0da2711364d7cb9f115b52289d4a9b61e8bca0da57f44a3a9d6fc9bdeb7274", size = 5859914, upload-time = "2025-02-16T04:28:23.303Z" },
     { url = "https://files.pythonhosted.org/packages/3e/47/c6ab03d6564a7c937590cff81a2742b5990f096cce7c1a622d325be340ee/pyproj-3.7.1-cp312-cp312-win_amd64.whl", hash = "sha256:aee664a9d806612af30a19dba49e55a7a78ebfec3e9d198f6a6176e1d140ec98", size = 6273196, upload-time = "2025-02-16T04:28:25.227Z" },
+]
+
+[[package]]
+name = "pysaga-cmd"
+version = "1.2.6"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/27/dc/febcd5182b629ee55ec1f45886a338f2471b185fa0d1ac7fa62d70c90c18/pysaga_cmd-1.2.6.tar.gz", hash = "sha256:de1e30d4c4f1f1232a79de83f5af24ede27a5aa243785611913748599658bc28", size = 120707, upload-time = "2024-06-29T06:19:43.245Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d2/0b/f9c08e2f6c7e7187f09bacba70fbe21d02f6730803cf09f0702676e38480/PySAGA_cmd-1.2.6-py3-none-any.whl", hash = "sha256:103d8798bb09c00e9b06a3f149ef4e4ec4555ecb39cb689274d475b6bce9f279", size = 119027, upload-time = "2024-06-29T06:19:40.833Z" },
 ]
 
 [[package]]
