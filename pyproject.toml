@@ -19,12 +19,18 @@ classifiers = [
 dependencies = [
     "fastparquet>=2024.11.0",
     'geopandas>=1.1.1',
+    "hyperopt>=0.2.7",
     'loguru',
+    "matplotlib>=3.10.3",
     "owslib>=0.34.1",
     'pip',
     "pyarrow>=21.0.0",
     "pysaga-cmd>=1.2.6",
     "rasterio>=1.4.3",
+    "scikit-learn>=1.7.1",
+    "seaborn>=0.13.2",
+    "setuptools>=80.9.0",
+    "xgboost>=3.0.2",
 ]
 
 [tool.mypy]
@@ -87,4 +93,7 @@ dev = [
     "mypy>=1.17.0",
     "pytest>=8.4.1",
     "ruff>=0.12.5",
+]
+plot = [
+    "pyqt5>=5.15.11",
 ]
