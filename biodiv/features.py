@@ -20,7 +20,7 @@ def sample_raster_values(
         return np.array(list(src.sample(coords, **sample_kwargs)))
 
 
-def main() -> pd.DataFrame:
+def get_features() -> pd.DataFrame:
     data = (
         BiodiversityDataset.read_data()
         .data.groupby(by=['Latitude', 'Longitude'])
@@ -35,7 +35,3 @@ def main() -> pd.DataFrame:
         )
         data[raster.stem] = sampled
     return data
-
-
-if __name__ == '__main__':
-    main()
