@@ -30,4 +30,5 @@ def test_sample_raster_values():
     n = 20
     points = random_points_in_polygon(bounds, n)
     sampled = sample_raster_values(raster, points, sample_kwargs={'indexes': 1})
+    assert (sampled == -9999.0).sum() == 0
     assert sampled.shape == (n, 1)
