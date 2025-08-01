@@ -8,7 +8,9 @@ from functools import cached_property, partial
 import numpy as np
 import xgboost as xgb
 from hyperopt import STATUS_OK, Trials, fmin, hp, tpe
+from hyperopt.pyll.base import scope
 from loguru import logger
+from sklearn.base import BaseEstimator, RegressorMixin
 from sklearn.decomposition import PCA
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.feature_selection import RFECV
@@ -114,6 +116,97 @@ class RandomForestTrainer(Trainer):
         self.log_results(test[y], test_preds, 'testing')
         self.log_results(train[y], train_preds, 'training')
         return (model, train_preds, test_preds)
+
+
+class XGBoostHyperoptCV(BaseEstimator, RegressorMixin):
+    def __init__(
+        self,
+        max_evals: int,
+        cv,
+        scoring: c.Callable,
+        random_seed: int | None = None,
+    ):
+        super().__init__()
+        self.max_evals = max_evals
+        self.cv = cv
+        self.scoring = scoring
+        self.random_seed = random_seed
+
+    @property
+    def model_(self) -> xgb.XGBRegressor:
+        return xgb.XGBRegressor(
+            device='cpu', seed=self.random_seed, importance_type='weight'
+        )
+
+    @staticmethod
+    def importance_getter(estimator: XGBoostHyperoptCV):
+        return estimator.best_model_.feature_importances_
+
+    @cached_property
+    def param_grid_(self):
+        return {
+            'eta': hp.loguniform('eta', np.log(1e-5), np.log(1.0)),
+            'reg_alpha': hp.loguniform('reg_alpha', np.log(1e-6), np.log(2.0)),
+            'reg_lambda': hp.loguniform(
+                'reg_lambda', np.log(1e-6), np.log(2.0)
+            ),
+            'gamma': hp.loguniform('gamma', np.log(1e-6), np.log(64.0)),
+            'subsample': hp.uniform('subsample', 0.5, 1.0),
+            'colsample_bytree': hp.uniform('colsample_bytree', 0.3, 1.0),
+            'max_depth': scope.int(
+                hp.qloguniform('max_depth', np.log(2), np.log(8), 1)
+            ),
+            'n_estimators': scope.int(
+                hp.qloguniform('n_estimators', np.log(10), np.log(100), 1)
+            ),
+        }
+
+    def fit_cv_(
+        self, params: dict[str, t.Any], X: pd.DataFrame, y: pd.Series
+    ) -> dict[str, t.Any]:
+        score = cross_val_score(
+            self.model_.set_params(**params),
+            X,
+            y,
+            cv=self.cv,
+            scoring=make_scorer(self.scoring),
+            n_jobs=-1,
+        ).mean()
+        return {
+            'loss': -score,
+            'status': STATUS_OK,
+        }
+
+    def fit(self, X, y):
+        trials = Trials()
+        best_hyperparameters = fmin(
+            fn=partial(
+                self.fit_cv_,
+                X=X,
+                y=y,
+            ),
+            space=self.param_grid_,
+            verbose=False,
+            algo=tpe.suggest,
+            max_evals=self.max_evals,
+            trials=trials,
+            rstate=np.random.default_rng(self.random_seed),
+        )
+        self.trials_ = trials
+        self.best_hyperparameters_ = best_hyperparameters
+        to_convert_to_int = ('max_depth', 'n_estimators')
+        for convertable in to_convert_to_int:
+            self.best_hyperparameters_[convertable] = int(
+                self.best_hyperparameters_[convertable]
+            )
+
+        self.best_model_ = self.model_.set_params(
+            **self.best_hyperparameters_
+        ).fit(X, y)
+        return self
+
+    def predict(self, X):
+        return self.best_model_.predict(X)
 
 
 @dataclass
