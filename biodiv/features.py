@@ -6,9 +6,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import rasterio as rio
+from loguru import logger
 
 from biodiv.config import INTERIM_DATA_DIR
-from biodiv.dataset import BiodiversityDataset
+from biodiv.dataset import BiodiversityDataset, GeomorphometricVariable
 
 
 def sample_raster_values(
@@ -21,17 +22,31 @@ def sample_raster_values(
 
 
 def get_features() -> pd.DataFrame:
+    # data = (
+    #    BiodiversityDataset.read_data()
+    #    .data
+    #    # .to_crs(EPSG)
+    #    .groupby(by=['geometry'])
+    #    .mean(numeric_only=True)
+    #    .reset_index()
+    # )
+    # coords = [(row.geometry.x, row.geometry.y) for row in data.itertuples()]
     data = (
         BiodiversityDataset.read_data()
-        .data.groupby(by=['Latitude', 'Longitude'])
+        .data
+        # .to_crs(EPSG)
+        .groupby(by=['Latitude', 'Longitude'])
         .mean(numeric_only=True)
         .reset_index()
     )
     coords = [(row.Longitude, row.Latitude) for row in data.itertuples()]
-
     for raster in INTERIM_DATA_DIR.glob('*.tif'):
-        sampled = sample_raster_values(
-            raster, coords, sample_kwargs={'indexes': 1}
-        )
-        data[raster.stem] = sampled
+        if raster.stem in GeomorphometricVariable._value2member_map_:
+            sampled = sample_raster_values(
+                raster, coords, sample_kwargs={'indexes': 1}
+            )
+            data[raster.stem] = sampled
+
+    logger.info('Shape of features: %s/%s' % (data.shape[0], data.shape[1]))
+
     return data
