@@ -415,16 +415,12 @@ class TerrainAnalysis:
             GeomorphometricVariable.TOPOGRAPHIC_POSITION_INDEX
         ):
             return None
-        tool = self.morphometry / 'Topographic Position Index (TPI)'
+        tool = self.morphometry / 'Multi-Scale Topographic Position Index (TPI)'
         return tool.execute(
             dem=self.dem,
             tpi=self.get_out_path(
                 GeomorphometricVariable.TOPOGRAPHIC_POSITION_INDEX
             ),
-            standard=0,
-            dw_weighting=0,
-            dw_idw_power=2,
-            dw_bandwidth=75,
             verbose=self.verbose,
             infer_obj_type=self.infer_obj_type,
             ignore_stderr=self.ignore_stderr,
