@@ -610,11 +610,10 @@ if __name__ == '__main__':
     )
     terrain_analysis = TerrainAnalysis(
         bathymetry.path,
-        saga=SAGA('saga_cmd'),
+        saga=SAGA(),
         verbose=True,
         infer_obj_type=False,
         ignore_stderr=True,
     )
     for tool in terrain_analysis.execute():
         logger.info('Computed %s geomorphometric variable' % tool[0])
-    breakpoint()
