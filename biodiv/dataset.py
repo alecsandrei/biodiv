@@ -7,13 +7,21 @@ from enum import Enum
 from pathlib import Path
 
 import geopandas as gpd
+import numpy as np
 import pandas as pd
+import rasterio as rio
 import shapely
 from loguru import logger
 from owslib.wcs import WebCoverageService
 from PySAGA_cmd.saga import SAGA
+from rasterio import warp
+from rasterio.enums import Resampling
 
-from biodiv.config import INTERIM_DATA_DIR, RAW_DATA_DIR
+from biodiv.config import (
+    EPSG,
+    INTERIM_DATA_DIR,
+    RAW_DATA_DIR,
+)
 
 if t.TYPE_CHECKING:
     from os import PathLike
@@ -34,7 +42,7 @@ class BiodiversityDataset:
             gpd.GeoDataFrame(
                 data,
                 geometry=gpd.points_from_xy(data.Longitude, data.Latitude),
-                crs='EPSG:4326',
+                crs=4326,
             )
         )
 
@@ -58,10 +66,60 @@ class Bathymetry:
             timeout=120,
             subsets=[('Lat', bbox[2], bbox[3]), ('Long', bbox[0], bbox[1])],
         ).read()
+
         if out_file is not None:
             with open(out_file, 'wb') as outfile:
                 outfile.write(data)
+        # return cls(reproject(io.BytesIO(data), out_file, BATHYMETRY_RESOLUTION))
+
         return cls(out_file)
+
+
+def reproject(
+    src,
+    dest: Path,
+    resolution: tuple[float, float],
+    resampling: Resampling = Resampling.bilinear,
+) -> Path:
+    dst_crs = rio.crs.CRS.from_epsg(EPSG)
+    with rio.open(src) as ds:
+        src_crs = ds.crs
+        arr = ds.read(1)
+        meta = ds.meta.copy()
+        newaff, width, height = warp.calculate_default_transform(
+            src_crs,
+            dst_crs,
+            ds.width,
+            ds.height,
+            *ds.bounds,
+            resolution=resolution,
+        )
+        newarr = np.empty((height, width), dtype=arr.dtype)
+        warp.reproject(
+            arr,
+            newarr,
+            src_transform=ds.transform,
+            src_nodata=-9999,
+            dst_nodata=-9999,
+            dst_transform=newaff,
+            width=width,
+            height=height,
+            src_crs=src_crs,
+            dst_crs=f'EPSG:{EPSG}',
+            resample=resampling,
+            dst_resolution=resolution,
+        )
+        meta.update(
+            {
+                'transform': newaff,
+                'width': width,
+                'height': height,
+                'crs': dst_crs,
+            }
+        )
+        with rio.open(dest, mode='w', **meta) as dest_raster:
+            dest_raster.write(newarr, 1)
+    return dest
 
 
 class GeomorphometricVariable(Enum):
