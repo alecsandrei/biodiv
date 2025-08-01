@@ -215,7 +215,7 @@ class XGBoostTrainer(Trainer):
     def param_grid_cv(self):
         return {
             'model__eta': hp.loguniform(
-                'model__eta', np.log(1e-5), np.log(1.0)
+                'model__eta', np.log(1e-6), np.log(1.0)
             ),
             'model__reg_alpha': hp.loguniform(
                 'model__reg_alpha', np.log(1e-6), np.log(2.0)
@@ -244,7 +244,7 @@ class XGBoostTrainer(Trainer):
     @cached_property
     def param_grid_rfecv(self):
         return {
-            'eta': hp.loguniform('eta', np.log(1e-5), np.log(1.0)),
+            'eta': hp.loguniform('eta', np.log(1e-6), np.log(1.0)),
             'reg_alpha': hp.loguniform('reg_alpha', np.log(1e-6), np.log(2.0)),
             'reg_lambda': hp.loguniform(
                 'reg_lambda', np.log(1e-6), np.log(2.0)
@@ -254,7 +254,7 @@ class XGBoostTrainer(Trainer):
             'colsample_bytree': hp.uniform('colsample_bytree', 0.3, 1.0),
             'max_depth': hp.loguniform('max_depth', np.log(2), np.log(8)),
             'n_estimators': hp.qloguniform(
-                'n_estimators', np.log(10), np.log(100), 1
+                'n_estimators', np.log(1), np.log(1000), 10
             ),
         }
 
@@ -287,7 +287,7 @@ class XGBoostTrainer(Trainer):
             estimator=self.model.set_params(**params),
             cv=self.cv,
             scoring=make_scorer(self.scoring),
-            step=1,
+            step=3,
         ).fit(X, y)
         score = fit.cv_results_['mean_test_score'].max()
         return {
@@ -342,41 +342,38 @@ class XGBoostTrainer(Trainer):
         return best_hyperparameters
 
     def train_rfecv(
-        self, y: str, max_evals: int | None = 100, show_plots: bool = False
+        self, y: str, max_evals: int = 100, show_plots: bool = False
     ):
         train, test = train_test_split(
             self.data, test_size=0.2, train_size=0.8, random_state=RANDOM_SEED
         )
-        trials = Trials()
-        best_hyperparameters = fmin(
-            fn=partial(
-                self.fit_rfecv,
-                X=train[self.predictors],
-                y=train[y],
-            ),
-            space=self.param_grid_rfecv,
-            algo=tpe.suggest,
+        model = XGBoostHyperoptCV(
             max_evals=max_evals,
-            trials=trials,
-            rstate=np.random.default_rng(RANDOM_SEED),
+            cv=self.cv,
+            scoring=self.scoring,
+            random_seed=RANDOM_SEED,
         )
-        predictors = trials.best_trial['result']['predictors']
-        logger.info('Selected predictors: %s' % predictors)
-        best_hyperparameters['max_depth'] = int(
-            best_hyperparameters['max_depth']
-        )
-        best_hyperparameters['n_estimators'] = int(
-            best_hyperparameters['n_estimators']
-        )
-        model = self.model.set_params(**best_hyperparameters).fit(
-            train[predictors], train[y]
-        )
+        rfe = RFECV(
+            estimator=model,
+            step=3,
+            cv=self.cv,
+            scoring=make_scorer(self.scoring),
+            importance_getter=model.importance_getter,
+            verbose=3,
+        ).fit(train[self.predictors], train[y])
+        predictors = [
+            predictor
+            for predictor, mask in zip(self.predictors, rfe.support_)
+            if mask
+        ]
+        model = rfe.estimator_
         test_preds = model.predict(test[predictors])
         train_preds = model.predict(train[predictors])
         self.log_results(test[y], test_preds, 'testing')
         self.log_results(train[y], train_preds, 'training')
         Diagnostic(test[y].values, test_preds).plot(show=show_plots)
-        return best_hyperparameters
+
+        breakpoint()
 
     def train(
         self,
@@ -399,4 +396,4 @@ def neg_mean_squared_error(*args, **kwargs):
 if __name__ == '__main__':
     data = get_features()
     trainer = XGBoostTrainer(data, scoring=neg_mean_squared_error)
-    trained = trainer.train(y='D', max_evals=500, show_plots=True, method='cv')
+    trained = trainer.train(y='D', max_evals=1000, show_plots=True, method='cv')
