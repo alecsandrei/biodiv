@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import collections.abc as c
+import io
 import typing as t
 from dataclasses import dataclass
 from enum import Enum
@@ -18,6 +19,7 @@ from rasterio import warp
 from rasterio.enums import Resampling
 
 from biodiv.config import (
+    BATHYMETRY_RESOLUTION,
     EPSG,
     INTERIM_DATA_DIR,
     RAW_DATA_DIR,
@@ -33,11 +35,29 @@ if t.TYPE_CHECKING:
 class BiodiversityDataset:
     data: gpd.GeoDataFrame
 
+    def label_features(self) -> None:
+        limits = gpd.read_file(RAW_DATA_DIR / 'limits.shp')
+        train = limits[limits['mode'] == 'train'].geometry.iloc[0]
+        test = limits[limits['mode'] == 'test'].geometry.iloc[0]
+        assert limits.crs.srs == 'EPSG:4326'
+        self.data['area'] = None
+        self.data.loc[self.data.intersects(train), 'mode'] = 'train'
+        self.data.loc[self.data.intersects(test), 'mode'] = 'test'
+
     @classmethod
     def read_data(cls) -> t.Self:
         indices = pd.read_csv(RAW_DATA_DIR / 'biodiversity' / 'indices.csv')
         stations = pd.read_csv(RAW_DATA_DIR / 'biodiversity' / 'stations.csv')
-        data = pd.merge(indices, stations, on='Station')
+        assert indices.shape[0] == stations.shape[0]
+        data = pd.merge(
+            indices,
+            stations,
+            left_index=True,
+            right_index=True,
+            suffixes=(None, '_y'),
+        ).drop_duplicates(subset='Station', keep='first')
+
+        # return cls(pd.merge(indices, stations, on='Station'))
         return cls(
             gpd.GeoDataFrame(
                 data,
@@ -67,12 +87,12 @@ class Bathymetry:
             subsets=[('Lat', bbox[2], bbox[3]), ('Long', bbox[0], bbox[1])],
         ).read()
 
-        if out_file is not None:
-            with open(out_file, 'wb') as outfile:
-                outfile.write(data)
-        # return cls(reproject(io.BytesIO(data), out_file, BATHYMETRY_RESOLUTION))
+        # if out_file is not None:
+        #    with open(out_file, 'wb') as outfile:
+        #        outfile.write(data)
+        return cls(reproject(io.BytesIO(data), out_file, BATHYMETRY_RESOLUTION))
 
-        return cls(out_file)
+        # return cls(out_file)
 
 
 def reproject(

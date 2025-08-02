@@ -19,15 +19,18 @@ from sklearn.metrics import (
     mean_absolute_error,
     mean_squared_error,
     r2_score,
+    root_mean_squared_error,
 )
 from sklearn.model_selection import (
     GridSearchCV,
     KFold,
+    LeaveOneGroupOut,
     cross_val_score,
     train_test_split,
 )
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+from spatialkfold.clusters import spatial_kfold_clusters
 
 from biodiv.config import RANDOM_SEED
 from biodiv.dataset import GeomorphometricVariable
@@ -35,12 +38,13 @@ from biodiv.features import get_features
 from biodiv.plots import Diagnostic
 
 if t.TYPE_CHECKING:
+    import geopandas as gpd
     import pandas as pd
 
 
 @dataclass
 class Trainer:
-    data: pd.DataFrame
+    data: gpd.GeoDataFrame
     scoring: c.Callable
 
     @cached_property
@@ -53,7 +57,7 @@ class Trainer:
 
     @property
     def cv(self) -> KFold:
-        return KFold(10, shuffle=True, random_state=RANDOM_SEED)
+        return KFold(5, shuffle=True, random_state=RANDOM_SEED)
 
     def log_results(self, true, pred, name: str) -> None:
         metrics = (
@@ -66,6 +70,16 @@ class Trainer:
             logger.info(
                 '%s of the model is %f for %s' % (metric.__name__, result, name)
             )
+
+    def spatial_cv(self, subset: gpd.GeoDataFrame):
+        subset['id'] = range(subset.shape[0])
+        return spatial_kfold_clusters(
+            subset,
+            name='id',
+            nfolds=5,
+            algorithm='kmeans',
+            random_state=RANDOM_SEED,
+        )
 
 
 @dataclass
@@ -234,7 +248,7 @@ class XGBoostTrainer(Trainer):
                 'model__max_depth', np.log(2), np.log(8), 1
             ),
             'model__n_estimators': hp.qloguniform(
-                'model__n_estimators', np.log(10), np.log(1000), 10
+                'model__n_estimators', np.log(10), np.log(1000), 1
             ),
             'pca__n_components': hp.quniform(
                 'pca__n_components', 1, len(self.predictors), 1
@@ -244,17 +258,17 @@ class XGBoostTrainer(Trainer):
     @cached_property
     def param_grid_rfecv(self):
         return {
-            'eta': hp.loguniform('eta', np.log(1e-6), np.log(1.0)),
+            'eta': hp.loguniform('eta', np.log(1e-3), np.log(1.0)),
             'reg_alpha': hp.loguniform('reg_alpha', np.log(1e-6), np.log(2.0)),
             'reg_lambda': hp.loguniform(
                 'reg_lambda', np.log(1e-6), np.log(2.0)
             ),
-            'gamma': hp.loguniform('gamma', np.log(1e-6), np.log(64.0)),
+            #'gamma': hp.loguniform('gamma', np.log(1e-6), np.log(64.0)),
             'subsample': hp.uniform('subsample', 0.5, 1.0),
             'colsample_bytree': hp.uniform('colsample_bytree', 0.3, 1.0),
             'max_depth': hp.loguniform('max_depth', np.log(2), np.log(8)),
             'n_estimators': hp.qloguniform(
-                'n_estimators', np.log(1), np.log(1000), 10
+                'n_estimators', np.log(10), np.log(1000), 10
             ),
         }
 
@@ -297,13 +311,20 @@ class XGBoostTrainer(Trainer):
         }
 
     def fit_cv(
-        self, params: dict[str, t.Any], X: pd.DataFrame, y: pd.Series
+        self,
+        params: dict[str, t.Any],
+        X: gpd.GeoDataFrame,
+        y: pd.Series,
+        predictors: list[str],
     ) -> dict[str, t.Any]:
+        spatial_folds = self.spatial_cv(X).folds.values.ravel()
+        group_cvs = LeaveOneGroupOut()
         score = cross_val_score(
             self.get_pipeline(params),
-            X,
+            X[predictors],
             y,
-            cv=self.cv,
+            groups=spatial_folds,
+            cv=group_cvs,
             scoring=make_scorer(self.scoring),
             n_jobs=-1,
         ).mean()
@@ -318,12 +339,12 @@ class XGBoostTrainer(Trainer):
         train, test = train_test_split(
             self.data, test_size=0.2, train_size=0.8, random_state=RANDOM_SEED
         )
+        # train = self.data.loc[self.data['mode'] == 'train'].copy()
+        # test = self.data.loc[self.data['mode'] == 'test'].copy()
         trials = Trials()
         best_hyperparameters = fmin(
             fn=partial(
-                self.fit_cv,
-                X=train[self.predictors],
-                y=train[y],
+                self.fit_cv, X=train, y=train[y], predictors=self.predictors
             ),
             space=self.param_grid_cv,
             algo=tpe.suggest,
@@ -347,20 +368,25 @@ class XGBoostTrainer(Trainer):
         train, test = train_test_split(
             self.data, test_size=0.2, train_size=0.8, random_state=RANDOM_SEED
         )
+        # train = self.data.loc[self.data['mode'] == 'train'].copy()
+        # test = self.data.loc[self.data['mode'] == 'test'].copy()
+        spatial_folds = self.spatial_cv(train).folds.values.ravel()
+        group_cvs = LeaveOneGroupOut()
         model = XGBoostHyperoptCV(
             max_evals=max_evals,
             cv=self.cv,
             scoring=self.scoring,
             random_seed=RANDOM_SEED,
         )
+
         rfe = RFECV(
             estimator=model,
-            step=3,
-            cv=self.cv,
+            step=1,
+            cv=group_cvs,
             scoring=make_scorer(self.scoring),
             importance_getter=model.importance_getter,
             verbose=3,
-        ).fit(train[self.predictors], train[y])
+        ).fit(train[self.predictors], train[y], groups=spatial_folds)
         predictors = [
             predictor
             for predictor, mask in zip(self.predictors, rfe.support_)
@@ -389,11 +415,15 @@ class XGBoostTrainer(Trainer):
         return result
 
 
-def neg_mean_squared_error(*args, **kwargs):
-    return -mean_squared_error(*args, **kwargs)
+def negate(metric_func: c.Callable):
+    def wrapper(*args, **kwargs):
+        return -metric_func(*args, **kwargs)
+
+    return wrapper
 
 
 if __name__ == '__main__':
     data = get_features()
-    trainer = XGBoostTrainer(data, scoring=neg_mean_squared_error)
-    trained = trainer.train(y='D', max_evals=1000, show_plots=True, method='cv')
+    # data = data.to_crs(3587)
+    trainer = XGBoostTrainer(data, scoring=negate(root_mean_squared_error))
+    trained = trainer.train(y='D', max_evals=100, show_plots=True, method='cv')
