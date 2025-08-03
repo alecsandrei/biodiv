@@ -38,6 +38,7 @@ dependencies = [
     { name = "scikit-learn" },
     { name = "seaborn" },
     { name = "setuptools" },
+    { name = "spatial-kfold" },
     { name = "xgboost" },
 ]
 
@@ -66,6 +67,7 @@ requires-dist = [
     { name = "scikit-learn", specifier = ">=1.7.1" },
     { name = "seaborn", specifier = ">=0.13.2" },
     { name = "setuptools", specifier = ">=80.9.0" },
+    { name = "spatial-kfold", specifier = ">=0.0.4" },
     { name = "xgboost", specifier = ">=3.0.2" },
 ]
 
@@ -911,6 +913,23 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/94/e7/b2c673351809dca68a0e064b6af791aa332cf192da575fd474ed7d6f16a2/six-1.17.0.tar.gz", hash = "sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81", size = 34031, upload-time = "2024-12-04T17:35:28.174Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274", size = 11050, upload-time = "2024-12-04T17:35:26.475Z" },
+]
+
+[[package]]
+name = "spatial-kfold"
+version = "0.0.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "geopandas" },
+    { name = "matplotlib" },
+    { name = "numpy" },
+    { name = "pandas" },
+    { name = "scikit-learn" },
+    { name = "shapely" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/06/30/61ca2605f44c7ab288b56fc46770c79b0981fc0b98e703b66fffcc005298/spatial_kfold-0.0.4.tar.gz", hash = "sha256:2cc8af90095c2f445ecb7fe044557c2d362ee4932a7bae6ac72bab2e081e2667", size = 261307, upload-time = "2025-06-22T11:47:20.254Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/97/ef/cf3fe860c05f6b4f9da77bc8938525db87545c7e2a994363219db81f060d/spatial_kfold-0.0.4-py3-none-any.whl", hash = "sha256:9c1893efdf40c16e22d7808e828159685904c3fd332964c83c131b37fabebb81", size = 288345, upload-time = "2025-06-22T11:47:17.303Z" },
 ]
 
 [[package]]
