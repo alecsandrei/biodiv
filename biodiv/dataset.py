@@ -7,11 +7,9 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-import geopandas as gpd
 import numpy as np
 import pandas as pd
 import rasterio as rio
-import shapely
 from loguru import logger
 from owslib.wcs import WebCoverageService
 from PySAGA_cmd.saga import SAGA
@@ -23,6 +21,7 @@ from biodiv.config import (
     EPSG,
     INTERIM_DATA_DIR,
     RAW_DATA_DIR,
+    SAGA_CMD,
 )
 
 if t.TYPE_CHECKING:
@@ -33,37 +32,25 @@ if t.TYPE_CHECKING:
 
 @dataclass
 class BiodiversityDataset:
-    data: gpd.GeoDataFrame
+    data: pd.DataFrame
 
-    def label_features(self) -> None:
-        limits = gpd.read_file(RAW_DATA_DIR / 'limits.shp')
-        train = limits[limits['mode'] == 'train'].geometry.iloc[0]
-        test = limits[limits['mode'] == 'test'].geometry.iloc[0]
-        assert limits.crs.srs == 'EPSG:4326'
-        self.data['area'] = None
-        self.data.loc[self.data.intersects(train), 'mode'] = 'train'
-        self.data.loc[self.data.intersects(test), 'mode'] = 'test'
+    @property
+    def margalef(self) -> pd.Series:
+        return self.data['D']
 
     @classmethod
     def read_data(cls) -> t.Self:
         indices = pd.read_csv(RAW_DATA_DIR / 'biodiversity' / 'indices.csv')
         stations = pd.read_csv(RAW_DATA_DIR / 'biodiversity' / 'stations.csv')
         assert indices.shape[0] == stations.shape[0]
-        data = pd.merge(
-            indices,
-            stations,
-            left_index=True,
-            right_index=True,
-            suffixes=(None, '_y'),
-        ).drop_duplicates(subset='Station', keep='first')
-
-        # return cls(pd.merge(indices, stations, on='Station'))
         return cls(
-            gpd.GeoDataFrame(
-                data,
-                geometry=gpd.points_from_xy(data.Longitude, data.Latitude),
-                crs=4326,
-            )
+            pd.merge(
+                indices,
+                stations,
+                left_index=True,
+                right_index=True,
+                suffixes=(None, '_y'),
+            ).drop_duplicates(subset='Station', keep='first')
         )
 
 
@@ -87,12 +74,7 @@ class Bathymetry:
             subsets=[('Lat', bbox[2], bbox[3]), ('Long', bbox[0], bbox[1])],
         ).read()
 
-        # if out_file is not None:
-        #    with open(out_file, 'wb') as outfile:
-        #        outfile.write(data)
         return cls(reproject(io.BytesIO(data), out_file, BATHYMETRY_RESOLUTION))
-
-        # return cls(out_file)
 
 
 def reproject(
@@ -143,6 +125,9 @@ def reproject(
 
 
 class GeomorphometricVariable(Enum):
+    DIFFERENCE_MEAN_ELEVATION = 'delev'
+    MEAN_CURVATURE = 'cmean'
+    ANISOTROPY = 'anisotropy'
     SLOPE = 'slope'
     HILLSHADE = 'shade'
     INDEX_OF_CONVERGENCE = 'ioc'
@@ -179,6 +164,26 @@ class GeomorphometricVariable(Enum):
     CELL_BALANCE = 'cbl'
     TOPOGRAPHIC_WETNESS_INDEX = 'twi'
     WIND_EXPOSITION_INDEX = 'wind'
+
+    @classmethod
+    def _get_path_to_variables(cls) -> list[Path]:
+        paths = []
+        for variable in cls:
+            path = (INTERIM_DATA_DIR / variable.value).with_suffix('.tif')
+            if path.exists():
+                paths.append(path)
+        return paths
+
+    @classmethod
+    def _as_df(cls) -> pd.DataFrame:
+        df = None
+        for raster in cls._get_path_to_variables():
+            with rio.open(raster, mode='r') as src:
+                array = src.read(1).flatten()
+                if df is None:
+                    df = pd.DataFrame(index=range(0, array.shape[0]))
+                df[raster.stem] = array
+        return df
 
 
 class TerrainAnalysis:
@@ -614,23 +619,66 @@ class TerrainAnalysis:
         )
 
 
-if __name__ == '__main__':
-    records = BiodiversityDataset.read_data()
-    bounds = (
-        shapely.Polygon.from_bounds(*records.data.total_bounds)
-        .buffer(0.1)
-        .bounds
-    )
-    bbox = (bounds[0], bounds[2], bounds[1], bounds[3])
+@dataclass
+class MultiscaleTerrainAnalysis:
+    """To be used later for multiscale analysis."""
 
+    dem: Path
+
+    def compute_variables(self):
+        from WBT.whitebox_tools import WhiteboxTools
+
+        wbt = WhiteboxTools()
+
+        variable_map = {
+            GeomorphometricVariable.HILLSHADE: 'Hillshade',
+            GeomorphometricVariable.ASPECT: 'Aspect',
+            GeomorphometricVariable.EASTNESS: 'Eastness',
+            GeomorphometricVariable.DIGITAL_ELEVATION_MODEL: 'Elevation',
+            GeomorphometricVariable.NORTHNESS: 'Northness',
+            GeomorphometricVariable.PLAN_CURVATURE: 'PlanCurvature',
+            GeomorphometricVariable.PROFILE_CURVATURE: 'ProfileCurvature',
+            GeomorphometricVariable.TERRAIN_RUGGEDNESS_INDEX: 'Ruggedness',
+            GeomorphometricVariable.SLOPE: 'Slope',
+            GeomorphometricVariable.TANGENTIAL_CURVATURE: 'TanCurvature',
+            GeomorphometricVariable.TOTAL_CURVATURE: 'TotalCurvature',
+            GeomorphometricVariable.ANISOTROPY: 'AnisotropyLTP',
+            GeomorphometricVariable.MEAN_CURVATURE: 'MeanCurvature',
+            GeomorphometricVariable.DIFFERENCE_MEAN_ELEVATION: 'DiffMeanElev',
+        }
+        for geomorphometric_variable, name in variable_map.items():
+            output_z = (
+                self.dem.parent / 'multiscale' / geomorphometric_variable.value
+            ).with_suffix('.tif')
+            output_lsp = output_z.with_stem(output_z.stem + '_lsp')
+            output_scale = output_z.with_stem(output_z.stem + '_scale')
+
+            wbt.gaussian_scale_space(
+                self.dem.as_posix(),
+                output_lsp.as_posix(),
+                output_z.as_posix(),
+                output_scale.as_posix(),
+                points=None,
+                sigma=0.5,
+                step=3,
+                num_steps=5,
+                lsp=name,
+                z_factor=None,
+            )
+
+
+def compute_geomorphometric_variables(
+    bbox: tuple[float, float, float, float],
+) -> None:
     logger.info('bbox of biodiversity records: %s' % str(bbox))
     bathymetry = Bathymetry.fetch(
         bbox=bbox,
-        out_file=INTERIM_DATA_DIR / 'dem.tif',
+        out_file=INTERIM_DATA_DIR
+        / f'{GeomorphometricVariable.DIGITAL_ELEVATION_MODEL.value}.tif',
     )
     terrain_analysis = TerrainAnalysis(
         bathymetry.path,
-        saga=SAGA(),
+        saga=SAGA(saga_cmd=SAGA_CMD),
         verbose=True,
         infer_obj_type=False,
         ignore_stderr=True,

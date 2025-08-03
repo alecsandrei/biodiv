@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import collections.abc as c
+import functools
 import typing as t
 from dataclasses import dataclass
 from functools import cached_property, partial
@@ -9,16 +10,12 @@ import numpy as np
 import xgboost as xgb
 from hyperopt import STATUS_OK, Trials, fmin, hp, tpe
 from hyperopt.pyll.base import scope
-from loguru import logger
 from sklearn.base import BaseEstimator, RegressorMixin
 from sklearn.decomposition import PCA
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.feature_selection import RFECV
 from sklearn.metrics import (
     make_scorer,
-    mean_absolute_error,
-    mean_squared_error,
-    r2_score,
     root_mean_squared_error,
 )
 from sklearn.model_selection import (
@@ -32,10 +29,11 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from spatialkfold.clusters import spatial_kfold_clusters
 
-from biodiv.config import RANDOM_SEED
+from biodiv.config import FIGURES_DIR, PROCESSED_DATA_DIR, RANDOM_SEED
 from biodiv.dataset import GeomorphometricVariable
 from biodiv.features import get_features
-from biodiv.plots import Diagnostic
+from biodiv.modeling.predict import predict
+from biodiv.plots import EDA, RegressorDiagnostic
 
 if t.TYPE_CHECKING:
     import geopandas as gpd
@@ -45,33 +43,19 @@ if t.TYPE_CHECKING:
 @dataclass
 class Trainer:
     data: gpd.GeoDataFrame
-    scoring: c.Callable
+    scoring: c.Callable | str
 
     @cached_property
     def predictors(self) -> list[str]:
-        return list(
-            set(GeomorphometricVariable._value2member_map_).intersection(
-                self.data.columns
-            )
+        return self.data.columns.intersection(
+            GeomorphometricVariable._value2member_map_
         )
 
     @property
     def cv(self) -> KFold:
         return KFold(5, shuffle=True, random_state=RANDOM_SEED)
 
-    def log_results(self, true, pred, name: str) -> None:
-        metrics = (
-            mean_squared_error,
-            mean_absolute_error,
-            r2_score,
-        )
-        for metric in metrics:
-            result = metric(true, pred)
-            logger.info(
-                '%s of the model is %f for %s' % (metric.__name__, result, name)
-            )
-
-    def spatial_cv(self, subset: gpd.GeoDataFrame):
+    def spatial_cv(self, subset: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
         subset['id'] = range(subset.shape[0])
         return spatial_kfold_clusters(
             subset,
@@ -81,54 +65,57 @@ class Trainer:
             random_state=RANDOM_SEED,
         )
 
+    def diagnose(
+        self, true: np.ndarray, preds: np.ndarray, name: str, show: bool = False
+    ) -> None:
+        diagnostic = RegressorDiagnostic(true, preds, name)
+        diagnostic.log_results()
+        diagnostic.plot(
+            show=show,
+            out_file=FIGURES_DIR / f'{diagnostic.name}_predictions.png',
+        )
+
 
 @dataclass
 class RandomForestTrainer(Trainer):
     @cached_property
-    def predictors(self) -> list[str]:
-        return list(
-            set(GeomorphometricVariable._value2member_map_).intersection(
-                self.data.columns
-            )
-        )
-
-    @cached_property
     def param_grid(self) -> dict[str, t.Any]:
         return {
-            #'model__n_estimators': np.arange(100, 501, 100),
-            'model__max_features': ['log2', 'sqrt'],
-            'model__min_samples_leaf': np.arange(1, 5),
+            'model__n_estimators': np.arange(100, 501, 100),
             'pca__n_components': np.arange(1, len(self.predictors)),
         }
 
-    @cached_property
+    @property
     def model(self) -> RandomForestRegressor:
-        return RandomForestRegressor(n_estimators=500, random_state=RANDOM_SEED)
+        return RandomForestRegressor(random_state=RANDOM_SEED)
 
-    @cached_property
+    @property
     def pipeline(self) -> Pipeline:
         return Pipeline(
             [
                 ('scaler', StandardScaler()),
-                ('pca', PCA()),
+                ('pca', PCA(random_state=RANDOM_SEED)),
                 ('model', self.model),
             ]
         )
 
     def train(self, y: str):
         train, test = train_test_split(self.data, test_size=0.2, train_size=0.8)
+        spatial_folds = self.spatial_cv(train).folds.values.ravel()
+        group_cvs = LeaveOneGroupOut()
         model = GridSearchCV(
             self.pipeline,
             self.param_grid,
             scoring=self.scoring,
             verbose=3,
-            cv=self.cv,
-        ).fit(train[self.predictors], train[y])
+            cv=group_cvs,
+            n_jobs=-1,
+        ).fit(train[self.predictors], train[y], groups=spatial_folds)
         best = model.best_estimator_
         test_preds = best.predict(test[self.predictors])
         train_preds = best.predict(train[self.predictors])
-        self.log_results(test[y], test_preds, 'testing')
-        self.log_results(train[y], train_preds, 'training')
+        self.diagnose(train[y].values, train_preds, 'rf_training')
+        self.diagnose(test[y].values, test_preds, 'rf_testing')
         return (model, train_preds, test_preds)
 
 
@@ -263,12 +250,12 @@ class XGBoostTrainer(Trainer):
             'reg_lambda': hp.loguniform(
                 'reg_lambda', np.log(1e-6), np.log(2.0)
             ),
-            #'gamma': hp.loguniform('gamma', np.log(1e-6), np.log(64.0)),
+            'gamma': hp.loguniform('gamma', np.log(1e-6), np.log(64.0)),
             'subsample': hp.uniform('subsample', 0.5, 1.0),
             'colsample_bytree': hp.uniform('colsample_bytree', 0.3, 1.0),
             'max_depth': hp.loguniform('max_depth', np.log(2), np.log(8)),
             'n_estimators': hp.qloguniform(
-                'n_estimators', np.log(10), np.log(1000), 10
+                'n_estimators', np.log(10), np.log(10000), 100
             ),
         }
 
@@ -339,8 +326,6 @@ class XGBoostTrainer(Trainer):
         train, test = train_test_split(
             self.data, test_size=0.2, train_size=0.8, random_state=RANDOM_SEED
         )
-        # train = self.data.loc[self.data['mode'] == 'train'].copy()
-        # test = self.data.loc[self.data['mode'] == 'test'].copy()
         trials = Trials()
         best_hyperparameters = fmin(
             fn=partial(
@@ -357,10 +342,9 @@ class XGBoostTrainer(Trainer):
         )
         test_preds = model.predict(test[self.predictors])
         train_preds = model.predict(train[self.predictors])
-        self.log_results(test[y], test_preds, 'testing')
-        self.log_results(train[y], train_preds, 'training')
-        Diagnostic(test[y].values, test_preds).plot(show=show_plots)
-        return best_hyperparameters
+        self.diagnose(train[y].values, train_preds, 'xgboost_cv_training')
+        self.diagnose(test[y].values, test_preds, 'xgboost_cv_testing')
+        return model
 
     def train_rfecv(
         self, y: str, max_evals: int = 100, show_plots: bool = False
@@ -368,10 +352,9 @@ class XGBoostTrainer(Trainer):
         train, test = train_test_split(
             self.data, test_size=0.2, train_size=0.8, random_state=RANDOM_SEED
         )
-        # train = self.data.loc[self.data['mode'] == 'train'].copy()
-        # test = self.data.loc[self.data['mode'] == 'test'].copy()
         spatial_folds = self.spatial_cv(train).folds.values.ravel()
         group_cvs = LeaveOneGroupOut()
+        assert callable(self.scoring)
         model = XGBoostHyperoptCV(
             max_evals=max_evals,
             cv=self.cv,
@@ -379,7 +362,7 @@ class XGBoostTrainer(Trainer):
             random_seed=RANDOM_SEED,
         )
 
-        rfe = RFECV(
+        rfecv = RFECV(
             estimator=model,
             step=1,
             cv=group_cvs,
@@ -389,17 +372,15 @@ class XGBoostTrainer(Trainer):
         ).fit(train[self.predictors], train[y], groups=spatial_folds)
         predictors = [
             predictor
-            for predictor, mask in zip(self.predictors, rfe.support_)
+            for predictor, mask in zip(self.predictors, rfecv.support_)
             if mask
         ]
-        model = rfe.estimator_
+        model = rfecv.estimator_
         test_preds = model.predict(test[predictors])
         train_preds = model.predict(train[predictors])
-        self.log_results(test[y], test_preds, 'testing')
-        self.log_results(train[y], train_preds, 'training')
-        Diagnostic(test[y].values, test_preds).plot(show=show_plots)
-
-        breakpoint()
+        self.diagnose(train[y].values, train_preds, 'xgboost_rfecv_training')
+        self.diagnose(test[y].values, test_preds, 'xgboost_rfecv_testing')
+        return model
 
     def train(
         self,
@@ -416,6 +397,7 @@ class XGBoostTrainer(Trainer):
 
 
 def negate(metric_func: c.Callable):
+    @functools.wraps(metric_func)
     def wrapper(*args, **kwargs):
         return -metric_func(*args, **kwargs)
 
@@ -423,7 +405,21 @@ def negate(metric_func: c.Callable):
 
 
 if __name__ == '__main__':
-    data = get_features()
-    # data = data.to_crs(3587)
+    data = get_features().rename(columns={'D': "Margalef's richness index"})
+    EDA(data["Margalef's richness index"]).plot(
+        show=False, out_file=FIGURES_DIR / 'margalef_eda.png'
+    )
+
     trainer = XGBoostTrainer(data, scoring=negate(root_mean_squared_error))
-    trained = trainer.train(y='D', max_evals=100, show_plots=True, method='cv')
+    model = trainer.train(
+        y="Margalef's richness index",
+        max_evals=100,
+        show_plots=False,
+        method='cv',
+    )
+
+    out_file = PROCESSED_DATA_DIR / 'margalef.tif'
+    predict(model, out_file)
+
+    # For RF use:
+    # RandomForestTrainer(data, scoring='neg_root_mean_squared_error').train('D')
