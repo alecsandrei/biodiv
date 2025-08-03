@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from loguru import logger
@@ -22,3 +23,7 @@ FIGURES_DIR = REPORTS_DIR / 'figures'
 EPSG = 6875
 RANDOM_SEED = 0
 BATHYMETRY_RESOLUTION = (500, 500)
+SAGA_CMD = 'saga_cmd'  # path to saga_cmd file
+COMPUTE_VARIABLES = bool(
+    int(os.getenv('COMPUTE_VARIABLES', 1))
+)  # Should be true when you run the first time
