@@ -30,6 +30,7 @@ dependencies = [
     "scikit-learn>=1.7.1",
     "seaborn>=0.13.2",
     "setuptools>=80.9.0",
+    "spatial-kfold>=0.0.4",
     "xgboost>=3.0.2",
 ]
 
